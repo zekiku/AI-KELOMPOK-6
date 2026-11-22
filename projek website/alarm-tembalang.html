@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alarm Tembalang</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#1b1f24; --card:#fff; --muted:#5b6472; --ok:#1f7a4d; --alert:#c62828; --accent:#2457c5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111418; --fg:#e8ebef; --card:#1b2027; --muted:#9aa4b2; --ok:#4cc38a; --alert:#ff6b6b; --accent:#7aa2ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--fg); padding:16px; }
+  main { max-width:520px; margin:0 auto; }
+  .card { background:var(--card); border-radius:14px; padding:18px; margin-bottom:14px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  p { color:var(--muted); margin:6px 0; line-height:1.45; }
+  #status { font-size:1.15rem; font-weight:600; color:var(--fg); }
+  #status.inside { color:var(--alert); }
+  #status.outside { color:var(--ok); }
+  button { font-size:1rem; padding:12px 16px; border:0; border-radius:10px; cursor:pointer; margin:6px 6px 0 0; }
+  .primary { background:var(--accent); color:#fff; }
+  .danger { background:var(--alert); color:#fff; }
+  .ghost { background:transparent; color:var(--fg); border:1px solid var(--muted); }
+  body.alarm { animation: flash .6s infinite alternate; }
+  @keyframes flash { from { background:var(--bg); } to { background:var(--alert); } }
+  code { font-size:.9em; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>🚨 Alarm Tembalang</h1>
+    <p>Alarm berbunyi otomatis saat perangkat ini masuk ke Kecamatan Tembalang, Semarang.</p>
+  </div>
+
+  <div class="card">
+    <div id="status">Belum aktif</div>
+    <p id="coords">–</p>
+    <button id="start" class="primary">Mulai pantau lokasi</button>
+    <button id="stop" class="danger" hidden>Matikan alarm</button>
+    <button id="test" class="ghost">Tes suara alarm</button>
+  </div>
+
+  <div class="card">
+    <p><b>Catatan:</b> batas wilayah memakai poligon perkiraan, bukan batas administrasi resmi, jadi hasilnya bisa meleset sedikit di dekat perbatasan.
+    Biarkan halaman ini tetap terbuka. Browser HP biasanya menghentikan GPS saat layar mati atau tab ada di latar belakang.
+    Halaman harus dibuka lewat <code>https://</code> atau <code>localhost</code> agar GPS bisa dipakai.</p>
+  </div>
+</main>
+
+<script>
+// Poligon perkiraan batas Kecamatan Tembalang [lat, lon]
+const TEMBALANG = [
+  [-7.0230, 110.4230], [-7.0270, 110.4420], [-7.0300, 110.4620],
+  [-7.0420, 110.4780], [-7.0600, 110.4850], [-7.0800, 110.4820],
+  [-7.0980, 110.4700], [-7.1060, 110.4500], [-7.1000, 110.4300],
+  [-7.0850, 110.4160], [-7.0650, 110.4130], [-7.0450, 110.4150],
+  [-7.0320, 110.4180]
+];
+
+function insidePolygon(lat, lon, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [yi, xi] = poly[i], [yj, xj] = poly[j];
+    if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+const $ = id => document.getElementById(id);
+let audioCtx, osc, gain, beepTimer, watchId, alarmOn = false, dismissed = false;
+
+function startSound() {
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  if (osc) return;
+  osc = audioCtx.createOscillator();
+  gain = audioCtx.createGain();
+  osc.type = "square";
+  osc.connect(gain).connect(audioCtx.destination);
+  gain.gain.value = 0;
+  osc.start();
+  let hi = false;
+  beepTimer = setInterval(() => {
+    hi = !hi;
+    osc.frequency.value = hi ? 1100 : 750;
+    gain.gain.value = 0.3;
+  }, 350);
+}
+function stopSound() {
+  clearInterval(beepTimer);
+  if (osc) { osc.stop(); osc.disconnect(); osc = null; }
+}
+
+function triggerAlarm() {
+  if (alarmOn || dismissed) return;
+  alarmOn = true;
+  startSound();
+  document.body.classList.add("alarm");
+  if (navigator.vibrate) navigator.vibrate([600, 300, 600, 300, 600]);
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification("🚨 Anda sudah masuk Kecamatan Tembalang!");
+  }
+  $("stop").hidden = false;
+}
+function stopAlarm() {
+  alarmOn = false;
+  dismissed = true; // tidak berbunyi lagi sampai keluar lalu masuk kembali
+  stopSound();
+  document.body.classList.remove("alarm");
+  $("stop").hidden = true;
+}
+
+function onPosition(pos) {
+  const { latitude: lat, longitude: lon, accuracy } = pos.coords;
+  $("coords").textContent = `Lat ${lat.toFixed(5)}, Lon ${lon.toFixed(5)} (±${Math.round(accuracy)} m)`;
+  const inside = insidePolygon(lat, lon, TEMBALANG);
+  const s = $("status");
+  if (inside) {
+    s.textContent = "📍 Anda berada di Kecamatan Tembalang!";
+    s.className = "inside";
+    triggerAlarm();
+  } else {
+    s.textContent = "Di luar Tembalang, sedang memantau…";
+    s.className = "outside";
+    dismissed = false;
+    if (alarmOn) stopAlarm(), dismissed = false;
+  }
+}
+function onError(err) {
+  $("status").textContent = "Gagal membaca lokasi: " + err.message;
+  $("status").className = "";
+}
+
+$("start").onclick = () => {
+  if (!("geolocation" in navigator)) return onError({ message: "Browser tidak mendukung GPS" });
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); // buka izin audio
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  if (watchId != null) navigator.geolocation.clearWatch(watchId);
+  watchId = navigator.geolocation.watchPosition(onPosition, onError, { enableHighAccuracy: true, maximumAge: 10000 });
+  $("status").textContent = "Mencari lokasi…";
+  $("start").textContent = "Memantau ✓";
+};
+$("stop").onclick = stopAlarm;
+$("test").onclick = () => {
+  if (osc) { stopSound(); $("test").textContent = "Tes suara alarm"; }
+  else { startSound(); $("test").textContent = "Hentikan tes"; }
+};
+</script>
+</body>
+</html>
